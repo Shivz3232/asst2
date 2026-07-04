@@ -1,7 +1,4 @@
-#include <chrono>
-
 #include "tasksys.h"
-
 
 IRunnable::~IRunnable() {}
 
@@ -50,7 +47,7 @@ const char* TaskSystemParallelSpawn::name() {
     return "Parallel + Always Spawn";
 }
 
-TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(num_threads), num_threads(num_threads) {
+TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(num_threads) {
     //
     // TODO: CS149 student implementations may decide to perform setup
     // operations (such as thread pool construction) here.
@@ -58,63 +55,13 @@ TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(n
     // (requiring changes to tasksys.h).
     //
 
-    num_total_tasks = 0;
-    num_tasks_consumed = 0;
-    mx_num_tasks_consumed = new std::mutex();
-
-    wrap_up = false;
-    thread_pool = new std::thread[num_threads];
-    for (int i = 0; i < num_threads; i++) {
-        thread_pool[i] = std::thread(&TaskSystemParallelSpawn::worker, this, i);
-    }
 }
 
-void TaskSystemParallelSpawn::worker(int id) {
-    int task_id;
-    while (!wrap_up) {
-        mx_num_tasks_consumed->lock();
-        if (num_tasks_consumed == num_total_tasks) {
-            mx_num_tasks_consumed->unlock();
-            continue;
-        }
-
-        task_id = num_tasks_consumed;
-        num_tasks_consumed += 1;
-        mx_num_tasks_consumed->unlock();
-
-        runnable->runTask(task_id, num_total_tasks);
-    }
-}
-
-TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {
-    wrap_up = true;
-
-    for (int i = 0; i < num_threads; i++) {
-        thread_pool[i].join();
-    }
-
-    delete mx_num_tasks_consumed;
-    delete[] thread_pool;
-}
+TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {}
 
 void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
-    this->runnable = runnable;
-    this->num_total_tasks = num_total_tasks;
-    this->num_tasks_consumed = 0;
-
-    while (true) {
-        mx_num_tasks_consumed->lock();
-
-        if (num_tasks_consumed >= num_total_tasks) {
-            num_total_tasks = 0;
-            num_tasks_consumed = 0;
-
-            mx_num_tasks_consumed->unlock();
-
-            break;
-        }
-
-        mx_num_tasks_consumed->unlock();
+    for (int i = 0; i < num_total_tasks; i++) {
+        runnable->runTask(i, num_total_tasks);
     }
 }
 
@@ -139,28 +86,71 @@ const char* TaskSystemParallelThreadPoolSpinning::name() {
     return "Parallel + Thread Pool + Spin";
 }
 
-TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads) {
+TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads), num_threads(num_threads) {
     //
     // TODO: CS149 student implementations may decide to perform setup
     // operations (such as thread pool construction) here.
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+
+    num_total_tasks = 0;
+    num_tasks_consumed = 0;
+    mx_num_tasks_consumed = new std::mutex();
+
+    wrap_up = false;
+    thread_pool = new std::thread[num_threads];
+    for (int i = 0; i < num_threads; i++) {
+        thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSpinning::worker, this);
+    }
 }
 
-TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {}
+TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
+    wrap_up = true;
+
+    for (int i = 0; i < num_threads; i++) {
+        thread_pool[i].join();
+    }
+
+    delete mx_num_tasks_consumed;
+    delete[] thread_pool;
+}
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
+    this->runnable = runnable;
+    this->num_total_tasks = num_total_tasks;
+    this->num_tasks_consumed = 0;
 
+    while (true) {
+        mx_num_tasks_consumed->lock();
 
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Part A.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
+        if (num_tasks_consumed >= num_total_tasks) {
+            num_total_tasks = 0;
+            num_tasks_consumed = 0;
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+            mx_num_tasks_consumed->unlock();
+
+            break;
+        }
+
+        mx_num_tasks_consumed->unlock();
+    }
+}
+
+void TaskSystemParallelThreadPoolSpinning::worker() {
+    int task_id;
+    while (!wrap_up) {
+        mx_num_tasks_consumed->lock();
+        if (num_tasks_consumed == num_total_tasks) {
+            mx_num_tasks_consumed->unlock();
+            continue;
+        }
+
+        task_id = num_tasks_consumed;
+        num_tasks_consumed += 1;
+        mx_num_tasks_consumed->unlock();
+
+        runnable->runTask(task_id, num_total_tasks);
     }
 }
 
