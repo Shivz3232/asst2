@@ -59,7 +59,7 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         void sync();
 
     private:
-        bool wrap_up;
+        bool spinning;
         int num_threads;
         std::thread* thread_pool;
 

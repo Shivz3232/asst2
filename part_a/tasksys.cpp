@@ -119,7 +119,7 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     num_tasks_consumed = 0;
     mx_num_tasks_consumed = new std::mutex();
 
-    wrap_up = false;
+    spinning = true;
     thread_pool = new std::thread[num_threads];
     for (int i = 0; i < num_threads; i++) {
         thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSpinning::worker, this);
@@ -127,7 +127,7 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
 }
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
-    wrap_up = true;
+    spinning = false;
 
     for (int i = 0; i < num_threads; i++) {
         thread_pool[i].join();
@@ -160,7 +160,7 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
 
 void TaskSystemParallelThreadPoolSpinning::worker() {
     int task_id;
-    while (!wrap_up) {
+    while (spinning) {
         mx_num_tasks_consumed->lock();
         if (num_tasks_consumed == num_total_tasks) {
             mx_num_tasks_consumed->unlock();
