@@ -47,7 +47,8 @@ const char* TaskSystemParallelSpawn::name() {
     return "Parallel + Always Spawn";
 }
 
-TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(num_threads) {
+TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(num_threads), num_threads(num_threads) {
+
     //
     // TODO: CS149 student implementations may decide to perform setup
     // operations (such as thread pool construction) here.
@@ -59,10 +60,30 @@ TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(n
 
 TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {}
 
-void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
-    for (int i = 0; i < num_total_tasks; i++) {
+void TaskSystemParallelSpawn::worker(int thread_id, IRunnable* runnable, int num_total_tasks) {
+    for (int i = thread_id; i < num_total_tasks; i += num_threads) {
         runnable->runTask(i, num_total_tasks);
     }
+}
+
+void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
+    std::thread *thread_pool = new std::thread[num_threads];
+
+    for (int i = 0; i < num_threads; i++) {
+        thread_pool[i] = std::thread(
+            &TaskSystemParallelSpawn::worker,
+            this,
+            i,
+            runnable,
+            num_total_tasks
+        );
+    }
+
+    for (int i = 0; i < num_threads; i++) {
+        thread_pool[i].join();
+    }
+
+    delete[] thread_pool;
 }
 
 TaskID TaskSystemParallelSpawn::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
