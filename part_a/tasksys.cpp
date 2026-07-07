@@ -255,21 +255,13 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
     this->runnable = runnable;
 
     // Notify workers
-    {
-        std::lock_guard<std::mutex> lk(*main_2_thread_m);
-    }
     main_2_thread_cv->notify_all();
 
-    int finished_threads = 0;
-    while (true) {
-        std::unique_lock<std::mutex> lk(*thread_2_main_m);
-        thread_2_main_cv->wait(lk);
-
-        finished_threads += 1;
-
-        if (finished_threads == num_threads) {
-            break;
-        }
+    {
+        std::unique_lock<std::mutex> lk(*mx_num_consumed_tasks);
+        thread_2_main_cv->wait(lk, [this] {
+            return this->num_consumed_tasks == this->num_total_tasks;
+        });
     }
 
     this->num_total_tasks = 0;
@@ -281,6 +273,7 @@ void TaskSystemParallelThreadPoolSleeping::worker(int id) {
     while (keep_alive) {
         std::unique_lock<std::mutex> lk(*main_2_thread_m);
         main_2_thread_cv->wait(lk);
+        lk.unlock();
 
         while (true) {
             int task_id;
@@ -298,9 +291,6 @@ void TaskSystemParallelThreadPoolSleeping::worker(int id) {
             runnable->runTask(task_id, num_total_tasks);
         }
 
-        {
-            std::lock_guard<std::mutex> lk(*thread_2_main_m);
-        }
         thread_2_main_cv->notify_one();
     }
 }
