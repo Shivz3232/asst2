@@ -1,3 +1,5 @@
+#include <chrono>
+
 #include "tasksys.h"
 
 IRunnable::~IRunnable() {}
@@ -196,35 +198,110 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
     return "Parallel + Thread Pool + Sleep";
 }
 
-TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
+TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads), num_threads(num_threads) {
     //
     // TODO: CS149 student implementations may decide to perform setup
     // operations (such as thread pool construction) here.
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+
+    main_2_thread_cv = new std::condition_variable();
+    main_2_thread_m = new std::mutex();
+    thread_2_main_cv = new std::condition_variable();
+    thread_2_main_m = new std::mutex();
+    keep_alive = true;
+    threads = new std::thread[num_threads];
+    for (int i = 0; i < num_threads; i++) {
+        threads[i] = std::thread(&TaskSystemParallelThreadPoolSleeping::worker, this, i);
+    }
+
+    num_total_tasks = 0;
+    num_consumed_tasks = 0;
+    mx_num_consumed_tasks = new std::mutex();
+    runnable = nullptr;
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
-    //
-    // TODO: CS149 student implementations may decide to perform cleanup
-    // operations (such as thread pool shutdown construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
+    // printf("In destructor\n");
+
+    keep_alive = false;
+
+    {
+        std::lock_guard<std::mutex> lk(*main_2_thread_m);
+    }
+    main_2_thread_cv->notify_all();
+
+    for (int i = 0; i < num_threads; i++) {
+        threads[i].join();
+    }
+
+    // printf("Threads joined successfully\n");
+
+    delete main_2_thread_cv;
+    delete main_2_thread_m;
+    delete thread_2_main_cv;
+    delete thread_2_main_m;
+    delete[] threads;
+
+    delete mx_num_consumed_tasks;
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
+    // printf("Run called\n");
 
+    this->num_total_tasks = num_total_tasks;
+    num_consumed_tasks = 0;
+    this->runnable = runnable;
 
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Parts A and B.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
+    // Notify workers
+    {
+        std::lock_guard<std::mutex> lk(*main_2_thread_m);
+    }
+    main_2_thread_cv->notify_all();
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+    int finished_threads = 0;
+    while (true) {
+        std::unique_lock<std::mutex> lk(*thread_2_main_m);
+        thread_2_main_cv->wait(lk);
+
+        finished_threads += 1;
+
+        if (finished_threads == num_threads) {
+            break;
+        }
+    }
+
+    this->num_total_tasks = 0;
+    num_consumed_tasks = 0;
+    this->runnable = nullptr;
+}
+
+void TaskSystemParallelThreadPoolSleeping::worker(int id) {
+    while (keep_alive) {
+        std::unique_lock<std::mutex> lk(*main_2_thread_m);
+        main_2_thread_cv->wait(lk);
+
+        while (true) {
+            int task_id;
+
+            mx_num_consumed_tasks->lock();
+            if (num_consumed_tasks == num_total_tasks) {
+                mx_num_consumed_tasks->unlock();
+                break;
+            }
+
+            task_id = num_consumed_tasks;
+            num_consumed_tasks += 1;
+            mx_num_consumed_tasks->unlock();
+
+            runnable->runTask(task_id, num_total_tasks);
+        }
+
+        {
+            std::lock_guard<std::mutex> lk(*thread_2_main_m);
+        }
+        thread_2_main_cv->notify_one();
     }
 }
 
