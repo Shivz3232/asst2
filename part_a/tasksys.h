@@ -89,10 +89,8 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
     private:
         int num_threads;
         bool keep_alive;
-        std::condition_variable* main_2_thread_cv;
-        std::mutex* main_2_thread_m;
-        std::condition_variable* thread_2_main_cv;
-        std::mutex* thread_2_main_m;
+        std::condition_variable* cv;
+        std::mutex* cv_m;
         std::thread* threads;
 
         int num_total_tasks;

@@ -206,10 +206,8 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     // (requiring changes to tasksys.h).
     //
 
-    main_2_thread_cv = new std::condition_variable();
-    main_2_thread_m = new std::mutex();
-    thread_2_main_cv = new std::condition_variable();
-    thread_2_main_m = new std::mutex();
+    cv = new std::condition_variable();
+    cv_m = new std::mutex();
     keep_alive = true;
     threads = new std::thread[num_threads];
     for (int i = 0; i < num_threads; i++) {
@@ -227,21 +225,14 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
 
     keep_alive = false;
 
-    {
-        std::lock_guard<std::mutex> lk(*main_2_thread_m);
-    }
-    main_2_thread_cv->notify_all();
+    cv->notify_all();
 
     for (int i = 0; i < num_threads; i++) {
         threads[i].join();
     }
 
-    // printf("Threads joined successfully\n");
-
-    delete main_2_thread_cv;
-    delete main_2_thread_m;
-    delete thread_2_main_cv;
-    delete thread_2_main_m;
+    delete cv;
+    delete cv_m;
     delete[] threads;
 
     delete mx_num_consumed_tasks;
@@ -254,12 +245,11 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
     num_consumed_tasks = 0;
     this->runnable = runnable;
 
-    // Notify workers
-    main_2_thread_cv->notify_all();
+    cv->notify_all();
 
     {
         std::unique_lock<std::mutex> lk(*mx_num_consumed_tasks);
-        thread_2_main_cv->wait(lk, [this] {
+        cv->wait(lk, [this] {
             return this->num_consumed_tasks == this->num_total_tasks;
         });
     }
@@ -271,9 +261,10 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
 
 void TaskSystemParallelThreadPoolSleeping::worker(int id) {
     while (keep_alive) {
-        std::unique_lock<std::mutex> lk(*main_2_thread_m);
-        main_2_thread_cv->wait(lk);
-        lk.unlock();
+        {
+            std::unique_lock<std::mutex> lk(*cv_m);
+            cv->wait(lk);
+        }
 
         while (true) {
             int task_id;
@@ -291,7 +282,7 @@ void TaskSystemParallelThreadPoolSleeping::worker(int id) {
             runnable->runTask(task_id, num_total_tasks);
         }
 
-        thread_2_main_cv->notify_one();
+        cv->notify_one();
     }
 }
 
