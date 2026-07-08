@@ -60,14 +60,22 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
 
     private:
         bool spinning;
+        std::mutex* mx_spinning;
+
         int num_threads;
         std::thread* thread_pool;
 
-        int num_total_tasks;
-        int num_tasks_consumed;
-        std::mutex* mx_num_tasks_consumed;
         IRunnable* runnable;
-        void worker();
+        int num_total_tasks;
+        std::mutex* mx_num_total_tasks;
+
+        int num_consumed_tasks;
+        std::mutex* mx_num_consumed_tasks;
+
+        int num_finished_tasks;
+        std::mutex* mx_num_finished_tasks;
+
+        void worker(int id);
 };
 
 /*

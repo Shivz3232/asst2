@@ -117,63 +117,96 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     // (requiring changes to tasksys.h).
     //
 
-    num_total_tasks = 0;
-    num_tasks_consumed = 0;
-    mx_num_tasks_consumed = new std::mutex();
-
     spinning = true;
+    mx_spinning = new std::mutex();
+
+    mx_num_total_tasks = new std::mutex();
+    mx_num_consumed_tasks = new std::mutex();
+    mx_num_finished_tasks = new std::mutex();
+
     thread_pool = new std::thread[num_threads];
     for (int i = 0; i < num_threads; i++) {
-        thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSpinning::worker, this);
+        thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSpinning::worker, this, i);
     }
 }
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
+    mx_spinning->lock();
     spinning = false;
+    mx_spinning->unlock();
 
     for (int i = 0; i < num_threads; i++) {
         thread_pool[i].join();
     }
 
-    delete mx_num_tasks_consumed;
+    delete mx_spinning;
     delete[] thread_pool;
 }
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
     this->runnable = runnable;
+
+    num_finished_tasks = 0;
+
+    mx_num_total_tasks->lock();
+    mx_num_consumed_tasks->lock();
+
     this->num_total_tasks = num_total_tasks;
-    this->num_tasks_consumed = 0;
+    num_consumed_tasks = 0;
+
+    mx_num_consumed_tasks->unlock();
+    mx_num_total_tasks->unlock();
+
 
     while (true) {
-        mx_num_tasks_consumed->lock();
-
-        if (num_tasks_consumed >= num_total_tasks) {
-            num_total_tasks = 0;
-            num_tasks_consumed = 0;
-
-            mx_num_tasks_consumed->unlock();
-
+        mx_num_finished_tasks->lock();
+        if (num_finished_tasks == num_total_tasks) {
+            mx_num_finished_tasks->unlock();
             break;
         }
-
-        mx_num_tasks_consumed->unlock();
+        mx_num_finished_tasks->unlock();
     }
+
+    mx_num_total_tasks->lock();
+    num_total_tasks = 0;
+    mx_num_total_tasks->unlock();
 }
 
-void TaskSystemParallelThreadPoolSpinning::worker() {
-    int task_id;
-    while (spinning) {
-        mx_num_tasks_consumed->lock();
-        if (num_tasks_consumed == num_total_tasks) {
-            mx_num_tasks_consumed->unlock();
+void TaskSystemParallelThreadPoolSpinning::worker(int id) {
+    while (true) {
+        mx_spinning->lock();
+        if (!spinning) {
+            mx_spinning->unlock();
+            break;
+        }
+        mx_spinning->unlock();
+
+        mx_num_total_tasks->lock();
+        if (num_total_tasks == 0) {
+            mx_num_total_tasks->unlock();
             continue;
         }
 
-        task_id = num_tasks_consumed;
-        num_tasks_consumed += 1;
-        mx_num_tasks_consumed->unlock();
+        mx_num_consumed_tasks->lock();
+        if (num_consumed_tasks == num_total_tasks) {
+            mx_num_consumed_tasks->unlock();
+            mx_num_total_tasks->unlock();
+            continue;
+        }
 
-        runnable->runTask(task_id, num_total_tasks);
+        int task_id = num_consumed_tasks;
+        int ntt = num_total_tasks;
+
+        num_consumed_tasks += 1;
+
+        mx_num_consumed_tasks->unlock();
+        mx_num_total_tasks->unlock();
+
+        runnable->runTask(task_id, ntt);
+
+        mx_num_finished_tasks->lock();
+        num_finished_tasks += 1;
+        mx_num_finished_tasks->unlock();
     }
 }
 
@@ -239,24 +272,9 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
-    // printf("Run called\n");
-
-    this->num_total_tasks = num_total_tasks;
-    num_consumed_tasks = 0;
-    this->runnable = runnable;
-
-    cv->notify_all();
-
-    {
-        std::unique_lock<std::mutex> lk(*mx_num_consumed_tasks);
-        cv->wait(lk, [this] {
-            return this->num_consumed_tasks == this->num_total_tasks;
-        });
+    for (int i = 0; i < num_total_tasks; i++) {
+        runnable->runTask(i, num_total_tasks);
     }
-
-    this->num_total_tasks = 0;
-    num_consumed_tasks = 0;
-    this->runnable = nullptr;
 }
 
 void TaskSystemParallelThreadPoolSleeping::worker(int id) {
