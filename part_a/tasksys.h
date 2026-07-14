@@ -67,10 +67,9 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
 
         IRunnable* runnable;
         int num_total_tasks;
-        std::mutex* mx_num_total_tasks;
 
-        int num_consumed_tasks;
-        std::mutex* mx_num_consumed_tasks;
+        int num_remaining_tasks;
+        std::mutex* mx_num_remaining_tasks;
 
         int num_finished_tasks;
         std::mutex* mx_num_finished_tasks;

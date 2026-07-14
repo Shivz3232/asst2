@@ -120,8 +120,11 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     spinning = true;
     mx_spinning = new std::mutex();
 
-    mx_num_total_tasks = new std::mutex();
-    mx_num_consumed_tasks = new std::mutex();
+    num_total_tasks = 0;
+    num_remaining_tasks = 0;
+    num_finished_tasks = 0;
+
+    mx_num_remaining_tasks = new std::mutex();
     mx_num_finished_tasks = new std::mutex();
 
     thread_pool = new std::thread[num_threads];
@@ -142,24 +145,22 @@ TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
     delete mx_spinning;
     delete[] thread_pool;
 
-    delete mx_num_total_tasks;
-    delete mx_num_consumed_tasks;
+    delete mx_num_remaining_tasks;
     delete mx_num_finished_tasks;
 }
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
     this->runnable = runnable;
+    this->num_total_tasks = num_total_tasks;
 
+    mx_num_remaining_tasks->lock();
+    mx_num_finished_tasks->lock();
+
+    num_remaining_tasks = num_total_tasks;
     num_finished_tasks = 0;
 
-    mx_num_total_tasks->lock();
-    mx_num_consumed_tasks->lock();
-
-    this->num_total_tasks = num_total_tasks;
-    num_consumed_tasks = 0;
-
-    mx_num_consumed_tasks->unlock();
-    mx_num_total_tasks->unlock();
+    mx_num_finished_tasks->unlock();
+    mx_num_remaining_tasks->unlock();
 
     while (true) {
         mx_num_finished_tasks->lock();
@@ -169,13 +170,11 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
         }
         mx_num_finished_tasks->unlock();
     }
-
-    mx_num_total_tasks->lock();
-    num_total_tasks = 0;
-    mx_num_total_tasks->unlock();
 }
 
 void TaskSystemParallelThreadPoolSpinning::worker(int id) {
+    int task_id;
+
     while (true) {
         mx_spinning->lock();
         if (!spinning) {
@@ -184,28 +183,21 @@ void TaskSystemParallelThreadPoolSpinning::worker(int id) {
         }
         mx_spinning->unlock();
 
-        mx_num_total_tasks->lock();
-        if (num_total_tasks == 0) {
-            mx_num_total_tasks->unlock();
-            continue;
+        {
+            mx_num_remaining_tasks->lock();
+            if (num_remaining_tasks == 0) {
+                mx_num_remaining_tasks->unlock();
+                continue;
+            }
+
+            task_id = num_total_tasks - num_remaining_tasks;
+
+            num_remaining_tasks -= 1;
+
+            mx_num_remaining_tasks->unlock();
         }
 
-        mx_num_consumed_tasks->lock();
-        if (num_consumed_tasks == num_total_tasks) {
-            mx_num_consumed_tasks->unlock();
-            mx_num_total_tasks->unlock();
-            continue;
-        }
-
-        int task_id = num_consumed_tasks;
-        int ntt = num_total_tasks;
-
-        num_consumed_tasks += 1;
-
-        mx_num_consumed_tasks->unlock();
-        mx_num_total_tasks->unlock();
-
-        runnable->runTask(task_id, ntt);
+        runnable->runTask(task_id, num_total_tasks);
 
         mx_num_finished_tasks->lock();
         num_finished_tasks += 1;
