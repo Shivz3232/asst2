@@ -141,6 +141,10 @@ TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
 
     delete mx_spinning;
     delete[] thread_pool;
+
+    delete mx_num_total_tasks;
+    delete mx_num_consumed_tasks;
+    delete mx_num_finished_tasks;
 }
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
@@ -156,7 +160,6 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
 
     mx_num_consumed_tasks->unlock();
     mx_num_total_tasks->unlock();
-
 
     while (true) {
         mx_num_finished_tasks->lock();
