@@ -74,7 +74,7 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         int num_finished_tasks;
         std::mutex* mx_num_finished_tasks;
 
-        void worker(int id);
+        void worker();
 };
 
 /*
@@ -94,16 +94,40 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         void sync();
 
     private:
-        int num_threads;
-        bool keep_alive;
-        std::condition_variable* cv;
-        std::mutex* cv_m;
-        std::thread* threads;
+        // -------------- Control Parameters ---------------
+        bool spinning;
+        std::mutex* mx_spinning;
 
-        int num_total_tasks;
-        int num_consumed_tasks;
-        std::mutex* mx_num_consumed_tasks;
+        int num_threads;
+        std::thread* thread_pool;
+
+        bool work_present;
+        std::condition_variable* cv_m2w;
+        std::mutex* mx_cv_m2w;
+
+        /*
+        | work done | work present | valid? |
+        -------------------------------------
+        |   false   |    false     |  true  |
+        |   false   |    true      |  false |
+        |   true    |    false     |  true  |
+        |   true    |    true      |  true  |
+        */
+
+        bool work_done;
+        std::condition_variable* cv_w2m;
+        std::mutex* mx_cv_w2m;
+
+        // -------------- Data Parameters ---------------------
         IRunnable* runnable;
+        int num_total_tasks;
+
+        int num_remaining_tasks;
+        std::mutex* mx_num_remaining_tasks;
+
+        int num_finished_tasks;
+        std::mutex* mx_num_finished_tasks;
+
         void worker(int id);
 };
 

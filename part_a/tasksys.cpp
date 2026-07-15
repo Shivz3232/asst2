@@ -117,9 +117,6 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     // (requiring changes to tasksys.h).
     //
 
-    spinning = true;
-    mx_spinning = new std::mutex();
-
     num_total_tasks = 0;
     num_remaining_tasks = 0;
     num_finished_tasks = 0;
@@ -127,9 +124,12 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     mx_num_remaining_tasks = new std::mutex();
     mx_num_finished_tasks = new std::mutex();
 
+    spinning = true;
+    mx_spinning = new std::mutex();
+
     thread_pool = new std::thread[num_threads];
     for (int i = 0; i < num_threads; i++) {
-        thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSpinning::worker, this, i);
+        thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSpinning::worker, this);
     }
 }
 
@@ -172,7 +172,7 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     }
 }
 
-void TaskSystemParallelThreadPoolSpinning::worker(int id) {
+void TaskSystemParallelThreadPoolSpinning::worker() {
     int task_id;
 
     while (true) {
@@ -234,68 +234,116 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     // (requiring changes to tasksys.h).
     //
 
-    cv = new std::condition_variable();
-    cv_m = new std::mutex();
-    keep_alive = true;
-    threads = new std::thread[num_threads];
-    for (int i = 0; i < num_threads; i++) {
-        threads[i] = std::thread(&TaskSystemParallelThreadPoolSleeping::worker, this, i);
-    }
-
     num_total_tasks = 0;
-    num_consumed_tasks = 0;
-    mx_num_consumed_tasks = new std::mutex();
-    runnable = nullptr;
+    num_remaining_tasks = 0;
+    num_finished_tasks = 0;
+
+    mx_num_remaining_tasks = new std::mutex();
+    mx_num_finished_tasks = new std::mutex();
+
+    work_present = false;
+    cv_m2w = new std::condition_variable();
+    mx_cv_m2w = new std::mutex();
+
+    work_done = false;
+    cv_w2m = new std::condition_variable();
+    mx_cv_w2m = new std::mutex();
+
+    spinning = true;
+    mx_spinning = new std::mutex();
+
+    thread_pool = new std::thread[num_threads];
+    for (int i = 0; i < num_threads; i++) {
+        thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSleeping::worker, this, i);
+    }
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
-    // printf("In destructor\n");
-
-    keep_alive = false;
-
-    cv->notify_all();
+    mx_spinning->lock();
+    spinning = false;
+    mx_spinning->unlock();
 
     for (int i = 0; i < num_threads; i++) {
-        threads[i].join();
+        thread_pool[i].join();
     }
 
-    delete cv;
-    delete cv_m;
-    delete[] threads;
+    delete[] thread_pool;
+    delete mx_spinning;
 
-    delete mx_num_consumed_tasks;
+    delete mx_cv_w2m;
+    delete cv_w2m;
+
+    delete mx_cv_m2w;
+    delete cv_m2w;
+
+    delete mx_num_remaining_tasks;
+    delete mx_num_finished_tasks;
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+    this->runnable = runnable;
+    this->num_total_tasks = num_total_tasks;
+
+    num_remaining_tasks = num_total_tasks;
+    num_finished_tasks = 0;
+    work_done = false;
+
+    {
+        std::lock_guard<std::mutex> lk(*mx_cv_m2w);
+        work_present = true;
+        cv_m2w->notify_all();
     }
+
+    std::unique_lock<std::mutex> lk(*mx_cv_w2m);
+    cv_w2m->wait(lk, [this]{ return work_done; });
+
+    // work_present = false; // Potentially unsafe - protect with mx?
 }
 
 void TaskSystemParallelThreadPoolSleeping::worker(int id) {
-    while (keep_alive) {
+    int task_id;
+
+    while (true) {
+        mx_spinning->lock();
+        if (!spinning) {
+            mx_spinning->unlock();
+            break;
+        }
+        mx_spinning->unlock();
+
         {
-            std::unique_lock<std::mutex> lk(*cv_m);
-            cv->wait(lk);
+            std::unique_lock<std::mutex> lk(*mx_cv_m2w);
+            cv_m2w->wait(lk, [this]{ return work_present; }); // Predicate might prevent destruction;
         }
 
         while (true) {
-            int task_id;
+            {
+                mx_num_remaining_tasks->lock();
+                if (num_remaining_tasks == 0) {
+                    mx_num_remaining_tasks->unlock();
+                    break;
+                }
 
-            mx_num_consumed_tasks->lock();
-            if (num_consumed_tasks == num_total_tasks) {
-                mx_num_consumed_tasks->unlock();
-                break;
+                task_id = num_total_tasks - num_remaining_tasks;
+
+                num_remaining_tasks -= 1;
+
+                mx_num_remaining_tasks->unlock();
             }
 
-            task_id = num_consumed_tasks;
-            num_consumed_tasks += 1;
-            mx_num_consumed_tasks->unlock();
-
             runnable->runTask(task_id, num_total_tasks);
-        }
 
-        cv->notify_one();
+            mx_num_finished_tasks->lock();
+            num_finished_tasks += 1;
+
+            if (num_finished_tasks == num_total_tasks) {
+                std::lock_guard<std::mutex> lk(*mx_cv_w2m);
+                work_done = true;
+                cv_w2m->notify_one();
+            }
+
+            mx_num_finished_tasks->unlock();
+        }
     }
 }
 
