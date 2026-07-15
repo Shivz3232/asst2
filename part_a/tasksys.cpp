@@ -234,23 +234,15 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     // (requiring changes to tasksys.h).
     //
 
-    num_total_tasks = 0;
-    num_remaining_tasks = 0;
-    num_finished_tasks = 0;
+    num_total = 0;
+    next_task = 0;
+    num_completed = 0;
 
-    mx_num_remaining_tasks = new std::mutex();
-    mx_num_finished_tasks = new std::mutex();
-
-    work_present = false;
+    mx = new std::mutex();
     cv_m2w = new std::condition_variable();
-    mx_cv_m2w = new std::mutex();
-
-    work_done = false;
     cv_w2m = new std::condition_variable();
-    mx_cv_w2m = new std::mutex();
 
-    spinning = true;
-    mx_spinning = new std::mutex();
+    shutdown = false;
 
     thread_pool = new std::thread[num_threads];
     for (int i = 0; i < num_threads; i++) {
@@ -259,90 +251,51 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
-    mx_spinning->lock();
-    spinning = false;
-    mx_spinning->unlock();
+    {
+        std::lock_guard<std::mutex> lk(*mx);
+        shutdown = true;
+    }
+
+    cv_m2w->notify_all();
 
     for (int i = 0; i < num_threads; i++) {
         thread_pool[i].join();
     }
 
     delete[] thread_pool;
-    delete mx_spinning;
 
-    delete mx_cv_w2m;
     delete cv_w2m;
-
-    delete mx_cv_m2w;
     delete cv_m2w;
-
-    delete mx_num_remaining_tasks;
-    delete mx_num_finished_tasks;
+    delete mx;
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
+    std::unique_lock<std::mutex> lk(*mx);
     this->runnable = runnable;
-    this->num_total_tasks = num_total_tasks;
-
-    num_remaining_tasks = num_total_tasks;
-    num_finished_tasks = 0;
-    work_done = false;
-
-    {
-        std::lock_guard<std::mutex> lk(*mx_cv_m2w);
-        work_present = true;
-        cv_m2w->notify_all();
-    }
-
-    std::unique_lock<std::mutex> lk(*mx_cv_w2m);
-    cv_w2m->wait(lk, [this]{ return work_done; });
-
-    // work_present = false; // Potentially unsafe - protect with mx?
+    this->num_total = num_total_tasks;
+    this->next_task = 0;
+    this->num_completed = 0;
+    cv_m2w->notify_all();
+    cv_w2m->wait(lk, [this]{ return num_completed == num_total; });
 }
 
 void TaskSystemParallelThreadPoolSleeping::worker(int id) {
-    int task_id;
-
+    std::unique_lock<std::mutex> lk(*mx);
     while (true) {
-        mx_spinning->lock();
-        if (!spinning) {
-            mx_spinning->unlock();
-            break;
-        }
-        mx_spinning->unlock();
+        cv_m2w->wait(lk, [this]{ return shutdown || next_task < num_total; });
 
-        {
-            std::unique_lock<std::mutex> lk(*mx_cv_m2w);
-            cv_m2w->wait(lk, [this]{ return work_present; }); // Predicate might prevent destruction;
-        }
+        if (shutdown && next_task >= num_total) return;
 
-        while (true) {
-            {
-                mx_num_remaining_tasks->lock();
-                if (num_remaining_tasks == 0) {
-                    mx_num_remaining_tasks->unlock();
-                    break;
-                }
+        int id = next_task++;
 
-                task_id = num_total_tasks - num_remaining_tasks;
+        lk.unlock();
 
-                num_remaining_tasks -= 1;
+        runnable->runTask(id, num_total);
 
-                mx_num_remaining_tasks->unlock();
-            }
+        lk.lock();
 
-            runnable->runTask(task_id, num_total_tasks);
-
-            mx_num_finished_tasks->lock();
-            num_finished_tasks += 1;
-
-            if (num_finished_tasks == num_total_tasks) {
-                std::lock_guard<std::mutex> lk(*mx_cv_w2m);
-                work_done = true;
-                cv_w2m->notify_one();
-            }
-
-            mx_num_finished_tasks->unlock();
+        if (++num_completed >= num_total) {
+            cv_w2m->notify_one();
         }
     }
 }

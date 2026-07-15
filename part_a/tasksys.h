@@ -94,39 +94,24 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         void sync();
 
     private:
-        // -------------- Control Parameters ---------------
-        bool spinning;
-        std::mutex* mx_spinning;
+        // Key takeaway: All shared data responsible for a batch should be under a single Mutex.
+        // For instance, do not create separate locks for num_total, next_task and num_completed.
 
+        // Prioritize using std::unique_lock and std::lock_guard they function similar to defer statements in go
+        // making sure locks are released when going out of scope.
+
+        std::mutex* mx;
+        std::condition_variable* cv_m2w;
+        std::condition_variable* cv_w2m;
+
+        bool shutdown;
         int num_threads;
         std::thread* thread_pool;
 
-        bool work_present;
-        std::condition_variable* cv_m2w;
-        std::mutex* mx_cv_m2w;
-
-        /*
-        | work done | work present | valid? |
-        -------------------------------------
-        |   false   |    false     |  true  |
-        |   false   |    true      |  false |
-        |   true    |    false     |  true  |
-        |   true    |    true      |  true  |
-        */
-
-        bool work_done;
-        std::condition_variable* cv_w2m;
-        std::mutex* mx_cv_w2m;
-
-        // -------------- Data Parameters ---------------------
         IRunnable* runnable;
-        int num_total_tasks;
-
-        int num_remaining_tasks;
-        std::mutex* mx_num_remaining_tasks;
-
-        int num_finished_tasks;
-        std::mutex* mx_num_finished_tasks;
+        int num_total;
+        int next_task;
+        int num_completed;
 
         void worker(int id);
 };
